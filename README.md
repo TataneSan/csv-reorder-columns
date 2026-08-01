@@ -1,101 +1,119 @@
 # csv-reorder-columns
 
-Reorder the columns of a CSV file by name or index. Unlisted columns stay in
-their original relative order, appended after (or prepended before) the
-listed ones.
+Reorder the columns of a CSV document by header name or 1-based index. Columns
+not listed are kept (appended or prepended) or dropped. Works on files or
+stdin, and doubles as a CI gate with `--check`.
 
 ## Features
 
-- `--order COL,...` accepts column names (with header) or 1-based indices
-- `--rest append|prepend` controls where unlisted columns go (default: append)
-- `--no-header` mode with index-only ordering
-- Custom delimiter for input and output
-- `--check` CI gate (exit 2 when the actual order differs), `--json` report
-- No dependencies, Python >= 3.9
+- Select columns by header **name** or **1-based index**, in any mix
+- Control unlisted columns: `--rest append|prepend|drop`
+- Custom delimiter and quote character
+- `--no-header` mode for headerless files (index selectors)
+- `--check` mode for CI: exit code 2 if the input order would change
+- `--json` report with the resolved order and dropped columns
+- Pure Python standard library, no dependencies
 
 ## Install
 
 ```bash
-pip install git+https://github.com/TataneSan/csv-reorder-columns.git
+pip install .
 ```
 
-Or from a local checkout:
+Or run directly from the source tree:
 
 ```bash
-git clone https://github.com/TataneSan/csv-reorder-columns.git
-cd csv-reorder-columns
-pip install .
+python -m csv_reorder_columns.cli --help
 ```
 
 ## Usage
 
 ```
-csv-reorder-columns [FILE] --order COL,...
-                    [--rest append|prepend] [-d DELIM]
-                    [--no-header] [--check] [--json] [--quiet]
+csv-reorder-columns [FILE] --order col2,col1 [--rest append|prepend|drop]
+                    [-d DELIM] [-q QUOTE] [--no-header]
+                    [--check] [--json] [--quiet]
 ```
 
-### Examples
+`FILE` defaults to stdin (`-` also means stdin).
 
-Bring `city` and `name` first by name:
+## Examples
+
+Move `email` and `name` to the front, keep the rest:
 
 ```bash
-printf 'name,age,city\nalice,30,paris\n' | csv-reorder-columns --order city,name
-# city,name,age
-# paris,alice,30
+csv-reorder-columns users.csv --order email,name
+# email,name,id,age,country
 ```
 
-Same with 1-based indices:
+Same with indices (1-based):
 
 ```bash
-csv-reorder-columns data.csv --order 3,1
+csv-reorder-columns users.csv --order 3,1
 ```
 
-Push unlisted columns to the front:
+Select only some columns, drop the others:
 
 ```bash
-csv-reorder-columns data.csv --order name --rest prepend
+csv-reorder-columns users.csv --order name,email --rest drop
 ```
 
-Headerless file (indices only):
+Put listed columns at the end:
 
 ```bash
-csv-reorder-columns --no-header --order 2,1 flat.csv
+csv-reorder-columns users.csv --order updated_at --rest prepend
 ```
 
-### CI check
+Semicolon-delimited input, from stdin:
 
 ```bash
-csv-reorder-columns --order id,name,email --check users.csv
-# exit 0: columns are already in that leading order
-# exit 2: order differs
+cat data.csv | csv-reorder-columns - -d ';' --order total,qty
 ```
 
-### JSON report
+Headerless CSV (selectors are indices):
 
 ```bash
-csv-reorder-columns --order city --json data.csv
-# {
-#   "changed": true,
-#   "columns": 3,
-#   "file": "data.csv",
-#   "listed": 1,
-#   "new_order": [
-#     "city",
-#     "name",
-#     "age"
-#   ]
-# }
+csv-reorder-columns raw.csv --no-header --order 2,1
+```
+
+CI gate — fail if `schema.csv` is not in the expected order:
+
+```bash
+csv-reorder-columns schema.csv --order id,name,email --check
+echo $?   # 0 = already ordered, 2 = would change
+```
+
+JSON report:
+
+```bash
+csv-reorder-columns users.csv --order email,name --rest drop --json
+```
+
+```json
+{
+  "file": "users.csv",
+  "rows": 101,
+  "columns_in": 5,
+  "columns_out": 2,
+  "new_order": ["email", "name"],
+  "dropped": ["id", "age", "country"],
+  "changed": true
+}
 ```
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| 0 | success |
-| 1 | I/O or argument error (unknown/duplicate column, empty input, ...) |
-| 2 | `--check` failed: column order differs |
+| 0    | success (or `--check`: input already in the requested order) |
+| 1    | I/O or argument error (unknown/ambiguous/duplicate column, ...) |
+| 2    | `--check`: the input column order would change |
+
+## Development
+
+```bash
+python -m pytest tests/
+```
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csv-reorder-columns"
+version = "1.0.0"
+description = "Reorder CSV columns by name or index list"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+csv-reorder-columns = "csv_reorder_columns.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["csv_reorder_columns*"]

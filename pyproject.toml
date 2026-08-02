@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "csv-reorder-columns"
 version = "1.0.0"
-description = "Reorder the columns of a CSV document by header name or index"
+description = "rewrite a CSV with its columns in a chosen order (drop/check/CI)"
 readme = "README.md"
-license = { text = "MIT" }
 requires-python = ">=3.9"
-dependencies = []
+license = {text = "MIT"}
+authors = [{name = "TataneSan"}]
 
 [project.scripts]
 csv-reorder-columns = "csv_reorder_columns.cli:main"

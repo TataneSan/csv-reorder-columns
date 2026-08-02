@@ -1,204 +1,87 @@
-"""csv-reorder-columns: reorder the columns of a CSV document.
+#!/usr/bin/env python3
+"""Reorder the columns of a CSV file.
 
-Reads a CSV document (file or stdin), rewrites the columns in the requested
-order and prints the result. Column selectors are header names or 1-based
-indices. Columns not listed are kept, appended or prepended according to
---rest. Also usable as a CI gate with --check.
+Takes an ordered list of column names and rewrites the CSV with the
+columns in that order. Unlisted columns are appended at the end unless
+--drop-rest is given.
 
 Exit codes:
-  0  success
-  1  I/O or argument error (unknown column, duplicate selector, ...)
-  2  check mode: the input column order differs from the requested one
+  0 - ok
+  1 - I/O or CLI error
+  2 - check failed (unknown column requested)
 """
-
 import argparse
 import csv
-import io
 import json
 import sys
 
-from . import __version__
-
-REST_MODES = ("append", "prepend", "drop")
-
-
-def parse_delimiter(value):
-    aliases = {"\\t": "\t", "tab": "\t", "comma": ",", "semicolon": ";", "pipe": "|"}
-    if value in aliases:
-        return aliases[value]
-    if len(value) != 1:
-        raise ValueError(
-            "delimiter must be a single character (aliases: tab, comma, semicolon, pipe)"
-        )
-    return value
-
-
-def split_selectors(order_arg):
-    parts = [p.strip() for p in order_arg.split(",")]
-    return [p for p in parts if p != ""]
-
-
-def resolve_selectors(header, selectors):
-    """Return (selected_indices, rest_indices) or raise ValueError."""
-    n = len(header)
-    selected = []
-    for sel in selectors:
-        if sel.lstrip("-").isdigit():
-            idx = int(sel)
-            if idx < 1 or idx > n:
-                raise ValueError(f"column index out of range: {sel} (header has {n} columns)")
-            pos = idx - 1
-        else:
-            matches = [i for i, name in enumerate(header) if name == sel]
-            if not matches:
-                raise ValueError(f"unknown column name: {sel!r}")
-            if len(matches) > 1:
-                raise ValueError(f"ambiguous column name {sel!r}: matches {len(matches)} header cells")
-            pos = matches[0]
-        if pos in selected:
-            raise ValueError(f"duplicate selector: {sel!r}")
-        selected.append(pos)
-    rest = [i for i in range(n) if i not in selected]
-    return selected, rest
-
-
-def final_order(selected, rest, mode):
-    if mode == "append":
-        return selected + rest
-    if mode == "prepend":
-        return rest + selected
-    return list(selected)  # drop
-
-
-def reorder_rows(rows, order):
-    out = []
-    for row in rows:
-        # tolerate ragged rows: missing cells become empty strings
-        out.append([row[i] if i < len(row) else "" for i in order])
-    return out
-
-
-def build_parser():
-    p = argparse.ArgumentParser(
-        prog="csv-reorder-columns",
-        description="Reorder the columns of a CSV document by name or index.",
-    )
-    p.add_argument("file", nargs="?", default="-",
-                   help="CSV file to read (default: stdin; '-' also means stdin)")
-    p.add_argument("-o", "--order", required=True,
-                   help="comma-separated column selectors (header names or 1-based indices)")
-    p.add_argument("--rest", choices=REST_MODES, default="append",
-                   help="what to do with unlisted columns: append, prepend, drop (default: append)")
-    p.add_argument("-d", "--delimiter", default=",",
-                   help="field delimiter (default: ','; aliases: tab, comma, semicolon, pipe)")
-    p.add_argument("-q", "--quotechar", default='"',
-                   help="quote character (default: double quote)")
-    p.add_argument("--no-header", action="store_true",
-                   help="treat the first row as data; selectors must be indices")
-    p.add_argument("--check", action="store_true",
-                   help="do not print the CSV; exit 2 if the input order would change")
-    p.add_argument("--json", action="store_true",
-                   help="print a JSON report instead of the CSV")
-    p.add_argument("--quiet", action="store_true",
-                   help="with --check, suppress the human-readable diagnosis")
-    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    return p
-
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    p = argparse.ArgumentParser(
+        prog="csv-reorder-columns",
+        description="Rewrite a CSV with its columns in a given order.")
+    p.add_argument("columns", help="comma-separated column names in the desired order")
+    p.add_argument("csvfile", nargs="?", default="-",
+                   help="CSV file (default: stdin, '-' for stdin)")
+    p.add_argument("-d", "--delimiter", default=",", help="field delimiter (default: ,)")
+    p.add_argument("--drop-rest", action="store_true",
+                   help="drop columns not listed instead of appending them")
+    p.add_argument("--check", action="store_true",
+                   help="exit 2 if the current column order already differs; don't rewrite")
+    p.add_argument("--json", action="store_true", help="emit JSON report (implies no CSV output)")
+    args = p.parse_args(argv)
+
+    wanted = [c.strip() for c in args.columns.split(",") if c.strip()]
+    if not wanted:
+        print("error: empty column list", file=sys.stderr)
+        return 1
 
     try:
-        delimiter = parse_delimiter(args.delimiter)
-    except ValueError as exc:
-        print(f"csv-reorder-columns: error: {exc}", file=sys.stderr)
-        return 1
-    if len(args.quotechar) != 1:
-        print("csv-reorder-columns: error: quotechar must be a single character", file=sys.stderr)
-        return 1
-
-    selectors = split_selectors(args.order)
-    if not selectors:
-        print("csv-reorder-columns: error: --order is empty", file=sys.stderr)
-        return 1
-
-    try:
-        if args.file == "-":
-            text = sys.stdin.read()
+        if args.csvfile == "-":
+            rows = list(csv.reader(sys.stdin, delimiter=args.delimiter))
         else:
-            with open(args.file, "r", encoding="utf-8", newline=None) as fh:
-                text = fh.read()
+            with open(args.csvfile, "r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.reader(fh, delimiter=args.delimiter))
     except OSError as exc:
-        print(f"csv-reorder-columns: error: cannot read {args.file}: {exc}", file=sys.stderr)
+        print("error: cannot read %s: %s" % (args.csvfile, exc), file=sys.stderr)
         return 1
 
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter, quotechar=args.quotechar)
-    rows = list(reader)
     if not rows:
-        print("csv-reorder-columns: error: empty input", file=sys.stderr)
+        print("error: empty CSV", file=sys.stderr)
         return 1
 
-    if args.no_header:
-        header = [str(i + 1) for i in range(len(rows[0]))]
-        data_rows = rows
-    else:
-        header = rows[0]
-        data_rows = rows[1:]
+    header = rows[0]
+    missing = [c for c in wanted if c not in header]
+    if missing:
+        print("error: unknown columns: %s (header: %s)" % (", ".join(missing), header),
+              file=sys.stderr)
+        return 2
 
-    try:
-        selected, rest = resolve_selectors(header, selectors)
-    except ValueError as exc:
-        print(f"csv-reorder-columns: error: {exc}", file=sys.stderr)
-        return 1
+    rest = [c for c in header if c not in wanted]
+    new_order = wanted if args.drop_rest else wanted + rest
+    new_idx = [header.index(c) for c in new_order]
 
-    order = final_order(selected, rest, args.rest)
-    new_header = [header[i] for i in order]
-
-    changed = order != list(range(len(header)))
+    report = {"input_order": header, "output_order": new_order, "dropped": rest if args.drop_rest else []}
 
     if args.check:
-        report = {
-            "file": args.file,
-            "columns": len(header),
-            "requested_order": new_header,
-            "rest_mode": args.rest,
-            "changed": changed,
-            "ok": not changed,
-        }
+        differs = new_order != header
+        report["differs"] = differs
         if args.json:
-            print(json.dumps(report, indent=2))
-        elif not args.quiet:
-            if changed:
-                print(
-                    f"csv-reorder-columns: {args.file}: column order would change "
-                    f"from [{', '.join(header)}] to [{', '.join(new_header)}]",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"csv-reorder-columns: {args.file}: column order OK", file=sys.stderr)
-        return 2 if changed else 0
-
-    out_rows = ([new_header] if not args.no_header else []) + reorder_rows(data_rows, order)
-
-    buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=delimiter, quotechar=args.quotechar,
-                        lineterminator="\n")
-    writer.writerows(out_rows)
-    output = buf.getvalue()
+            json.dump(report, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        elif differs:
+            print("current order: %s" % ",".join(header))
+            print("desired order: %s" % ",".join(new_order))
+        return 2 if differs else 0
 
     if args.json:
-        report = {
-            "file": args.file,
-            "rows": len(out_rows),
-            "columns_in": len(header),
-            "columns_out": len(new_header),
-            "new_order": new_header,
-            "dropped": [header[i] for i in rest] if args.rest == "drop" else [],
-            "changed": changed,
-        }
-        print(json.dumps(report, indent=2))
-    else:
-        sys.stdout.write(output)
+        json.dump(report, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    writer = csv.writer(sys.stdout, delimiter=args.delimiter, lineterminator="\n")
+    for row in rows:
+        writer.writerow([row[i] if i < len(row) else "" for i in new_idx])
     return 0
 
 
